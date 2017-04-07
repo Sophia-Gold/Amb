@@ -153,14 +153,8 @@ parseAST s = fromParseResult $ parseExp s
 amb :: Maybe String -> Exp -> Amb
 amb t a = parseAmb t a
 
--- ambs :: a -> [a] -> [a]
--- ambs a = (:) a
-
 require :: Maybe String -> Exp -> Require AmbVal
 require t r =  parseRequire t r
-
--- requires :: a -> [a] -> [a]
--- requires r = (:) r
 
 unwrapJustAmbVal :: Maybe AmbVal -> Bool
 unwrapJustAmbVal m = case m of
@@ -196,9 +190,6 @@ flushStr str = putStr str >> hFlush stdout
 
 readPrompt :: String -> IO String
 readPrompt prompt = flushStr prompt >> getLine
-  
--- printResult :: [Amb] -> [Require AmbVal] -> String -> IO ()
--- printResult ambs reqs str = putStrLn $ show $ evalString ambs reqs str
 
 repl :: [Amb] -> [Require AmbVal] -> IO ()
 repl oldAmbs oldReqs = do
