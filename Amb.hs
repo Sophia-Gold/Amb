@@ -1,18 +1,19 @@
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE PatternSynonyms #-}
 
 module Main where
 
 import System.IO
 import System.Environment
 import Data.List
+import Data.Maybe
 import Data.Bool
 import Control.Applicative
-import Control.Monad.State
 import Language.Haskell.Exts.Parser
 import Language.Haskell.Exts.Syntax
 import Text.Show.Functions
+import Debug.Trace
 
 
 data MultiList = SList [String]
@@ -24,38 +25,33 @@ data Amb = Amb { ambTag :: Maybe String, ambVal :: MultiList } deriving (Show)
 
 parseSList :: Exp -> Maybe [String]
 parseSList (List exprs) = mapM (\ expr -> case expr of
-                                    Lit (String a) -> Just a
-                                    _              -> Nothing) exprs
+                                           Lit (String a) -> Just a
+                                           _              -> Nothing) exprs
 
 parseCList :: Exp -> Maybe [Char]
 parseCList (List exprs) = mapM (\ expr -> case expr of
-                                    Lit (Char a) -> Just a
-                                    _            -> Nothing) exprs
+                                            Lit (Char a) -> Just a
+                                            _            -> Nothing) exprs
 
 parseIList :: Exp -> Maybe [Integer]
 parseIList (List exprs) = mapM (\ expr -> case expr of
-                                    Lit (Int a) -> Just a
-                                    _           -> Nothing) exprs
+                                            Lit (Int a) -> Just a
+                                            _           -> Nothing) exprs
 
 parseFList :: Exp -> Maybe [Double]
 parseFList (List exprs) = mapM (\ expr -> case expr of
-                                    Lit (Frac a) -> Just $ fromRational a
-                                    _            -> Nothing) exprs
-
-unwrapJust :: Maybe a -> a
-unwrapJust m = case m of
-  Just x  -> x
-  Nothing -> undefined
+                                            Lit (Frac a) -> Just $ fromRational a
+                                            _            -> Nothing) exprs
 
 parseList :: Exp -> MultiList
-parseList l = unwrapJust (SList <$> parseSList l
-                      <|> CList <$> parseCList l
-                      <|> IList <$> parseIList l
-                      <|> FList <$> parseFList l)
+parseList l = fromJust (SList <$> parseSList l
+                    <|> CList <$> parseCList l
+                    <|> IList <$> parseIList l 
+                    <|> FList <$> parseFList l)
 
 parseAmb :: Maybe String -> Exp -> Amb
 parseAmb tag value = Amb tag $ parseList value
-
+  
 ------------------------------------------------------------------
 
 data AmbVal = StringVal String
@@ -139,7 +135,7 @@ parseLambda :: Exp -> Maybe (AmbVal -> Maybe AmbVal)
 parseLambda (Lambda _ [PVar (Ident var)] body) = parseExpr var body
 
 parseRequire :: Maybe String -> Exp -> Require a
-parseRequire tag value = Require tag $ unwrapJust $ parseLambda value
+parseRequire tag value = Require tag $ fromJust $ parseLambda value
 
 --------------------------------------------------------------------
 
@@ -156,8 +152,8 @@ amb t a = parseAmb t a
 require :: Maybe String -> Exp -> Require AmbVal
 require t r =  parseRequire t r
 
-unwrapJustAmbVal :: Maybe AmbVal -> Bool
-unwrapJustAmbVal m = case m of
+fromJustAmbVal :: Maybe AmbVal -> Bool
+fromJustAmbVal m = case m of
   Just (BoolVal True)  -> True
   Just (BoolVal False) -> False
   Nothing              -> undefined
@@ -166,24 +162,41 @@ eval :: [Amb] -> [Require AmbVal] -> [MultiList]
 eval [] r = []
 eval a [] = concat $ permutations $ map ambVal a
 eval a@(x:xs) r@(y:ys) = if ambTag x == reqTag y
-                            then do filter (unwrapJustAmbVal . reqAmbVal y)
+                            then do filter (fromJustAmbVal . reqAmbVal y)
                                            (concat $ permutations $ [ListVal $ ambVal x])
                                     eval xs [y]
                                     eval [x] ys
                                  else do eval xs [y]
                                          eval [x] ys
 
+pattern IdentUQ i <- Var (UnQual (Ident i))
+pattern (:$:) l r <- App l r
+
 evalString :: [Amb] -> [Require AmbVal] -> String -> Either String T
-evalString ambs reqs str = let ast = parseAST str in
+evalString ambs reqs str = let ast = parseExp str in
   case ast of
-    App (App (Var (UnQual (Ident "amb")))
-             (Var (UnQual (Ident x)))) (List _)         -> Right $ AmbT $ (amb (Just x) ast) : ambs
-    App (Var (UnQual (Ident "amb")))   (List _)         -> Right $ AmbT $ (amb Nothing ast) : ambs
-    App (App (Var (UnQual (Ident "require"))) 
-             (Var (UnQual (Ident x))))   (Lambda _ _ _) -> Right $ ReqT $ (require (Just x) ast) : reqs
-    App (Var (UnQual (Ident "require"))) (Lambda _ _ _) -> Right $ ReqT $ (require Nothing ast) : reqs
-    Var (UnQual (Ident "eval"))                         -> Right $ EvalT $ eval ambs reqs
-    _                                                   -> Left "unexpected input"
+    (ParseFailed _ _) -> Left "unexpected input"
+    _                 -> let parse = fromParseResult ast in
+      case parse of
+        (IdentUQ "amb" :$: IdentUQ t)
+          :$: (List a)                    -> Right $ AmbT $ (amb (Just t) (List a)) : ambs
+        (IdentUQ "amb")
+          :$: (List a)                    -> Right $ AmbT $ (amb Nothing (List a)) : ambs
+        (IdentUQ "amb" :$: IdentUQ t)
+          :$: _                           -> Left "unexpected input"
+        (IdentUQ "amb")
+          :$: _                           -> Left "unexpected input"
+        (IdentUQ "require" :$: IdentUQ t)
+          :$: (Paren (Lambda r1 r2 r3))   -> Right $ ReqT $ (require (Just t) (Lambda r1 r2 r3)) : reqs
+        (IdentUQ "require")
+          :$: (Paren (Lambda r1 r2 r3))   -> Right $ ReqT $ (require Nothing (Lambda r1 r2 r3)) : reqs
+        (IdentUQ "require" :$: IdentUQ t)
+          :$: _                           -> Left "unexpected input"
+        (IdentUQ "require")
+          :$: _                           -> Left "unexpected input"
+        IdentUQ "eval"                    -> Right $ EvalT $ eval ambs reqs
+        (IdentUQ "eval") :$: _            -> Left "unexpected input" 
+        _                                 -> Left "unexpected input"
 
 flushStr :: String -> IO ()
 flushStr str = putStr str >> hFlush stdout
@@ -194,14 +207,14 @@ readPrompt prompt = flushStr prompt >> getLine
 repl :: [Amb] -> [Require AmbVal] -> IO ()
 repl oldAmbs oldReqs = do
   input   <- readPrompt "AmbEval>>> "
-  if input == "quit" 
+  if input == "quit"
      then return ()
      else let result = evalString oldAmbs oldReqs input in
             case result of 
-              Right (AmbT newAmbs) -> print result >> repl newAmbs oldReqs 
-              Right (ReqT newReqs) -> print result >> repl oldAmbs newReqs
-              Right (EvalT _)      -> print result >> repl oldAmbs oldReqs
-              Left _               -> print result >> repl oldAmbs oldReqs
+              Right (AmbT newAmbs) -> print newAmbs >> repl newAmbs oldReqs 
+              Right (ReqT newReqs) -> print newReqs >> repl oldAmbs newReqs
+              Right (EvalT x)      -> print x       >> repl oldAmbs oldReqs
+              Left x               -> print x       >> repl oldAmbs oldReqs
 
 main :: IO ()
 main = repl [] []
