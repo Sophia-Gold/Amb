@@ -22,24 +22,32 @@ instance Eq Void where
 instance Show Void where
   show x = []
 
-data MultiList = SList [String]
-               | CList [Char]
-               | IList [Integer]
-               | FList [Double]
-               | EList [Void]
-               | MList [MultiList]
-               | AList [AmbVal]deriving (Eq)
+data AmbVal = StringVal String
+            | CharVal Char
+            | IntVal Integer
+            | FloatVal Double
+            | BoolVal Bool
+            | SList [String]
+            | CList [Char]
+            | IList [Integer]
+            | FList [Double]
+            | EList [Void]
+            | ListVal [AmbVal] deriving (Eq)
+           
+instance Show AmbVal where
+  show (StringVal x) = show x
+  show (CharVal   x) = show x
+  show (IntVal    x) = show x
+  show (FloatVal  x) = show x
+  show (BoolVal   x) = show x
+  show (SList     x) = show x
+  show (CList     x) = show x
+  show (IList     x) = show x
+  show (FList     x) = show x
+  show (EList     x) = show x
+  show (ListVal   x) = show x
 
-instance Show MultiList where
-  show (SList x) = show x
-  show (CList x) = show x
-  show (IList x) = show x
-  show (FList x) = show x
-  show (EList x) = show x
-  show (MList x) = show x
-  show (AList x) = show x
-  
-data Amb = Amb { ambTag :: Maybe String, ambVal :: MultiList } deriving (Show)
+data Amb = Amb { ambTag :: Maybe String, ambVal :: AmbVal } deriving (Show)
 
 parseEList :: [Exp] -> Maybe [Void]
 parseEList exprs = case exprs of
@@ -65,8 +73,8 @@ parseFList :: [Exp] -> Maybe [Double]
 parseFList exprs = mapM (\ expr -> case expr of
   Lit (Frac a) -> Just $ fromRational a
   _            -> Nothing) exprs
-
-parseList :: [Exp] -> MultiList
+  
+parseList :: [Exp] -> AmbVal
 parseList l = fromJust (EList <$> parseEList l
                     <|> SList <$> parseSList l
                     <|> CList <$> parseCList l
@@ -77,22 +85,6 @@ parseAmb :: Maybe String -> [Exp] -> Amb
 parseAmb tag value = Amb tag $ parseList value
   
 ------------------------------------------------------------------
-
---take type argument to prevent heterogenous lists
-data AmbVal = StringVal String
-            | CharVal Char
-            | IntVal Integer
-            | FloatVal Double
-            | BoolVal Bool
-            | ListVal MultiList deriving (Eq)
-
-instance Show AmbVal where
-  show (StringVal x) = show x
-  show (CharVal   x) = show x
-  show (IntVal    x) = show x
-  show (FloatVal  x) = show x
-  show (BoolVal   x) = show x
-  show (ListVal   x) = show x
 
 deriving instance Show Require
 data Require = Require { reqTag :: Maybe String, reqVal :: AmbVal -> Maybe AmbVal }
@@ -151,10 +143,10 @@ parseOp op = case op of
 
 parseExpr :: String -> Exp -> Maybe (AmbVal -> Maybe AmbVal)
 parseExpr var (Var (UnQual (Ident var'))) | var == var' = Just Just
-parseExpr var (List l)         = Just (\_ -> Just $ ListVal $ parseList l)
-parseExpr var (Lit (String i)) = Just (\_ -> parseLiteralString i)
-parseExpr var (Lit (Char i))   = Just (\_ -> parseLiteralChar i)
-parseExpr var (Lit (Int i))    = Just (\_ -> parseLiteralInt i)
+parseExpr var (List l)         = Just (\_ -> Just $ parseList l)
+parseExpr var (Lit (String l)) = Just (\_ -> parseLiteralString l)
+parseExpr var (Lit (Char l))   = Just (\_ -> parseLiteralChar l)
+parseExpr var (Lit (Int l))    = Just (\_ -> parseLiteralInt l)
 parseExpr var (InfixApp l (QVarOp (UnQual (Symbol sym))) r) = do
   lhs  <- parseExpr var l
   op   <- parseOp sym 
@@ -192,26 +184,34 @@ fromJustAmbVal m = case m of
   Just (BoolVal False) -> False
   Nothing              -> undefined
 
-mapMultiList :: (forall a. [a] -> [[a]]) -> MultiList -> [MultiList]
+mapMultiList :: (forall a. [a] -> [[a]]) -> AmbVal -> [AmbVal]
 mapMultiList f l = case l of
+  EList x -> map EList $ f x
   SList x -> map SList $ f x
   CList x -> map CList $ f x
   IList x -> map IList $ f x
   FList x -> map FList $ f x
-  MList x -> map MList $ f x
+
+unwrapListVal :: AmbVal -> [AmbVal]
+unwrapListVal l = case l of 
+  SList x -> map StringVal x
+  CList x -> map CharVal x
+  IList x -> map IntVal x
+  FList x -> map FloatVal x
 
 permuteAmb :: Amb -> Amb
-permuteAmb a = Amb (ambTag a) (MList $ mapMultiList permutations $ ambVal a)
+permuteAmb a = Amb (ambTag a) (ListVal $ mapMultiList permutations $ ambVal a)
 
 filterAmb :: [Amb] -> Require -> [Amb]
 filterAmb a r = map (\x -> if ambTag x == reqTag r
                               then Amb (ambTag x)
-                                       (AList $ filter (fromJustAmbVal . reqVal r) [ListVal $ ambVal x])
+                                       (ListVal $ filter (fromJustAmbVal . reqVal r) (unwrapListVal $ ambVal x))
                                    else x) a
 
 eval :: [Amb] -> [Require] -> [AmbVal]
-eval a [] = map (ListVal . ambVal) a
+eval a [] = map ambVal a
 eval a r@(r1:rs) = eval (filterAmb a r1) rs
+
 
 pattern IdentUQ i <- Var (UnQual (Ident i))
 pattern (:$:) l r <- App l r
