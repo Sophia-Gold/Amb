@@ -5,15 +5,12 @@
 module Main where
 
 import System.IO
-import System.Environment
 import Data.List
 import Data.Maybe
-import Data.Bool
 import Control.Applicative
 import Language.Haskell.Exts.Parser
 import Language.Haskell.Exts.Syntax
 import Text.Show.Functions
-
 
 data Void
 instance Eq Void where
@@ -27,12 +24,11 @@ data AmbVal = StringVal String
             | IntVal Integer
             | FloatVal Double
             | BoolVal Bool
+            | EList [Void]
             | SList [String]
             | CList [Char]
             | IList [Integer]
-            | FList [Double]
-            | EList [Void]
-            | ListVal [AmbVal] deriving (Eq)
+            | FList [Double] deriving (Eq)
            
 instance Show AmbVal where
   show (StringVal x) = show x
@@ -40,14 +36,13 @@ instance Show AmbVal where
   show (IntVal    x) = show x
   show (FloatVal  x) = show x
   show (BoolVal   x) = show x
+  show (EList     x) = show x
   show (SList     x) = show x
   show (CList     x) = show x
   show (IList     x) = show x
   show (FList     x) = show x
-  show (EList     x) = show x
-  show (ListVal   x) = show x
-
-data Amb = Amb { ambTag :: Maybe String, ambVal :: AmbVal } deriving (Show)
+  
+data Amb = Amb { ambTag :: Maybe String, ambVal :: [AmbVal] } deriving (Show)
 
 parseEList :: [Exp] -> Maybe [Void]
 parseEList exprs = case exprs of
@@ -82,7 +77,7 @@ parseList l = fromJust (EList <$> parseEList l
                     <|> FList <$> parseFList l)
 
 parseAmb :: Maybe String -> [Exp] -> Amb
-parseAmb tag value = Amb tag $ parseList value
+parseAmb tag value = Amb tag [parseList value]
   
 ------------------------------------------------------------------
 
@@ -98,6 +93,9 @@ parseLiteralChar v = Just $ CharVal v
 parseLiteralInt :: Integer -> Maybe AmbVal
 parseLiteralInt v = Just $ IntVal v
 
+parseLiteralFrac :: Rational -> Maybe AmbVal
+parseLiteralFrac v = Just $ FloatVal $ fromRational v
+
 intOp :: (Integer -> Integer -> Integer) -> AmbVal -> AmbVal -> Maybe AmbVal
 intOp f (IntVal x) (IntVal y) = Just $ IntVal $ f x y
 intOp f _ _ = Nothing
@@ -111,7 +109,11 @@ eqOp f (StringVal x) (StringVal y) = Just $ BoolVal $ f x y
 eqOp f (CharVal x) (CharVal y)     = Just $ BoolVal $ f x y
 eqOp f (IntVal x) (IntVal y)       = Just $ BoolVal $ f x y
 eqOp f (FloatVal x) (FloatVal y)   = Just $ BoolVal $ f x y
-eqOp f (ListVal x) (ListVal y)     = Just $ BoolVal $ f x y
+eqOp f (EList x) (EList y)         = Just $ BoolVal $ f x y
+eqOp f (SList x) (SList y)         = Just $ BoolVal $ f x y
+eqOp f (CList x) (CList y)         = Just $ BoolVal $ f x y
+eqOp f (IList x) (IList y)         = Just $ BoolVal $ f x y
+eqOp f (FList x) (FList y)         = Just $ BoolVal $ f x y
 eqOp f x y = Nothing
 
 ordOp :: (forall a. (Ord a) => a -> a -> Bool) -> AmbVal -> AmbVal -> Maybe AmbVal
@@ -120,9 +122,7 @@ ordOp f (FloatVal x) (FloatVal y) = Just $ BoolVal $ f x y
 ordOp f _ _ = Nothing
 
 boolOp :: (Bool -> Bool -> Bool) -> AmbVal -> AmbVal -> Maybe AmbVal
--- boolOp :: (forall a. Eq a => a -> a -> Bool) -> AmbVal -> AmbVal -> Maybe AmbVal
 boolOp f (BoolVal x) (BoolVal y) = Just $ BoolVal $ f x y
--- boolOp f (ListVal x) (ListVal y) = Just $ BoolVal $ f x y
 boolOp f _ _ = Nothing
 
 parseOp :: String -> Maybe (AmbVal -> AmbVal -> Maybe AmbVal)
@@ -147,6 +147,7 @@ parseExpr var (List l)         = Just (\_ -> Just $ parseList l)
 parseExpr var (Lit (String l)) = Just (\_ -> parseLiteralString l)
 parseExpr var (Lit (Char l))   = Just (\_ -> parseLiteralChar l)
 parseExpr var (Lit (Int l))    = Just (\_ -> parseLiteralInt l)
+parseExpr var (Lit (Frac l))    = Just (\_ -> parseLiteralFrac l)
 parseExpr var (InfixApp l (QVarOp (UnQual (Symbol sym))) r) = do
   lhs  <- parseExpr var l
   op   <- parseOp sym 
@@ -167,7 +168,7 @@ parseRequire tag value = Require tag $ fromJust $ parseLambda value
 
 data T = AmbT [Amb]
        | ReqT [Require]
-       | EvalT [AmbVal]
+       | EvalT [[AmbVal]]
 
 parseAST :: String -> Exp
 parseAST s = fromParseResult $ parseExp s
@@ -178,40 +179,31 @@ amb t a = parseAmb t a
 require :: Maybe String -> Exp -> Require
 require t r =  parseRequire t r
 
-fromJustAmbVal :: Maybe AmbVal -> Bool
-fromJustAmbVal m = case m of
-  Just (BoolVal True)  -> True
-  Just (BoolVal False) -> False
-  Nothing              -> undefined
+unwrapBoolVal :: AmbVal -> Bool 
+unwrapBoolVal (BoolVal b) = b
 
-mapMultiList :: (forall a. [a] -> [[a]]) -> AmbVal -> [AmbVal]
+mapMultiList :: (forall a. [a] -> [[a]]) -> [AmbVal] -> [AmbVal]
 mapMultiList f l = case l of
-  EList x -> map EList $ f x
-  SList x -> map SList $ f x
-  CList x -> map CList $ f x
-  IList x -> map IList $ f x
-  FList x -> map FList $ f x
-
-unwrapListVal :: AmbVal -> [AmbVal]
-unwrapListVal l = case l of 
-  SList x -> map StringVal x
-  CList x -> map CharVal x
-  IList x -> map IntVal x
-  FList x -> map FloatVal x
+  [EList x] -> map EList $ f x
+  [SList x] -> map SList $ f x
+  [CList x] -> map CList $ f x
+  [IList x] -> map IList $ f x
+  [FList x] -> map FList $ f x
 
 permuteAmb :: Amb -> Amb
-permuteAmb a = Amb (ambTag a) (ListVal $ mapMultiList permutations $ ambVal a)
+permuteAmb a = Amb (ambTag a) (mapMultiList permutations $ ambVal a)
 
 filterAmb :: [Amb] -> Require -> [Amb]
 filterAmb a r = map (\x -> if ambTag x == reqTag r
                               then Amb (ambTag x)
-                                       (ListVal $ filter (fromJustAmbVal . reqVal r) (unwrapListVal $ ambVal x))
+                                       (filter
+                                        (unwrapBoolVal . fromMaybe (BoolVal True) . reqVal r)
+                                        (ambVal x))
                                    else x) a
 
-eval :: [Amb] -> [Require] -> [AmbVal]
+eval :: [Amb] -> [Require] -> [[AmbVal]]
 eval a [] = map ambVal a
 eval a r@(r1:rs) = eval (filterAmb a r1) rs
-
 
 pattern IdentUQ i <- Var (UnQual (Ident i))
 pattern (:$:) l r <- App l r
