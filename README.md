@@ -1,5 +1,9 @@
 # Amb
 
+__Please Note:__ I'm no longer maintaining this due to breaking changes in [haskell-src-exts](https://hackage.haskell.org/package/haskell-src-exts).
+
+---
+
 A Haskell version of LISP's `amb` operator for nondeterministic evaluation. An early predecessor of logic programming, `amb` was introduced by John McCarthy in his 1961 paper [_A Basis for a Mathematical Theory of Computation_](http://www-formal.stanford.edu/jmc/basis.html) as a means of exploring "non-computable functions."
 
 Based on the Scheme version, this DSL comes complete with its own command line REPL and only three commands.
@@ -29,7 +33,3 @@ AmbEval>>> eval
 AmbEval>>> quit
 ~>
 ````
-
-----
-
-_More examples coming soon..._
